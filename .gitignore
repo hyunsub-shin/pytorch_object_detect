@@ -1,0 +1,21 @@
+# Virtual Environment
+venv_*/
+data/
+coco_data/
+cache/
+*.pth
+*.xlsx
+# *.png
+# *.jpg
+# *.jpeg
+# *.gif
+# *.bmp
+# *.tiff
+# *.ico
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
