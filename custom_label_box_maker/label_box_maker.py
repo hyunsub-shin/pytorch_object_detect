@@ -116,6 +116,16 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.tableWidget_img_list.clicked.connect(self.display_selected_image)
 
+        # 원본 이미지 크기 저장을 위한 변수 추가
+        self.original_width = 0
+        self.original_height = 0
+        self.scale_factor_x = 1.0
+        self.scale_factor_y = 1.0
+        
+        # 클래스 이름과 ID 매핑 딕셔너리 추가
+        self.class_mapping = {}
+        self.next_class_id = 0
+
     def load_existing_data(self):
         if os.path.exists(self.excel_path):
             self.df = pd.read_excel(self.excel_path)
@@ -152,21 +162,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_image_path = os.path.join(self.image_dir, image_name)
         self.current_pixmap = QPixmap(self.current_image_path)
         
-        # 이미지의 원본 크기를 가져옴
-        image_width = self.current_pixmap.width()
-        image_height = self.current_pixmap.height()
+        # 원본 이미지 크기 저장
+        self.original_width = self.current_pixmap.width()
+        self.original_height = self.current_pixmap.height()
         
         # 최대 크기 설정 (640x640)
         max_size = 640
         
         # 이미지 크기가 640보다 큰 경우, 크기를 줄여서 표시
-        if image_width > max_size or image_height > max_size:
+        if self.original_width > max_size or self.original_height > max_size:
             # 비율을 유지하며 크기 조정
-            self.current_pixmap = self.current_pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio)
+            scaled_pixmap = self.current_pixmap.scaled(max_size, max_size, Qt.KeepAspectRatio)
+            # 스케일 팩터 계산
+            self.scale_factor_x = scaled_pixmap.width() / self.original_width
+            self.scale_factor_y = scaled_pixmap.height() / self.original_height
+            self.current_pixmap = scaled_pixmap
         else:
-            # 이미지가 640보다 작은 경우, 원본 크기로 설정
-            self.current_pixmap = self.current_pixmap.scaled(image_width, image_height, Qt.KeepAspectRatio)
-          
+            self.scale_factor_x = 1.0
+            self.scale_factor_y = 1.0
+            self.current_pixmap = self.current_pixmap.scaled(self.original_width, self.original_height, Qt.KeepAspectRatio)
+        
         # 이미지 크기 비율에 맞게 QLabel 크기 조정
         self.label_img.setFixedSize(self.current_pixmap.width(), self.current_pixmap.height())  # QLabel의 크기를 이미지 크기에 맞게 설정
         
@@ -186,27 +201,28 @@ class MainWindow(QtWidgets.QMainWindow):
         
     def update_coordinates(self, rect):
         if not rect.isNull():
-            xmin = rect.left()
-            ymin = rect.top()
-            xmax = rect.right()
-            ymax = rect.bottom()
-            
-            # xmin, ymin, xmax, ymax 값이 음수일 경우 0으로 수정
-            xmin = max(xmin, 0)
-            ymin = max(ymin, 0)
-            xmax = max(xmax, 0)
-            ymax = max(ymax, 0)
+            # 화면에 표시된 좌표
+            xmin = max(rect.left(), 0)
+            ymin = max(rect.top(), 0)
+            xmax = max(rect.right(), 0)
+            ymax = max(rect.bottom(), 0)
             
             # 좌상단과 우하단의 좌표가 항상 정확하도록 수정
-            xmin_t = min(xmin, xmax)
-            xmax_t = max(xmin, xmax)
-            ymin_t = min(ymin, ymax)
-            ymax_t = max(ymin, ymax)
-                
-            self.label_xmin_val.setText(str(xmin_t))
-            self.label_ymin_val.setText(str(ymin_t))
-            self.label_xmax_val.setText(str(xmax_t))
-            self.label_ymax_val.setText(str(ymax_t))
+            xmin = min(xmin, xmax)
+            xmax = max(xmin, xmax)
+            ymin = min(ymin, ymax)
+            ymax = max(ymin, ymax)
+            
+            # 원본 이미지 크기에 맞게 좌표 변환
+            xmin = int(xmin / self.scale_factor_x)
+            ymin = int(ymin / self.scale_factor_y)
+            xmax = int(xmax / self.scale_factor_x)
+            ymax = int(ymax / self.scale_factor_y)
+            
+            self.label_xmin_val.setText(str(xmin))
+            self.label_ymin_val.setText(str(ymin))
+            self.label_xmax_val.setText(str(xmax))
+            self.label_ymax_val.setText(str(ymax))
 
     def save_data(self):
         if not self.current_image_path:
@@ -218,25 +234,53 @@ class MainWindow(QtWidgets.QMainWindow):
             QMessageBox.warning(self, "경고", "레이블을 입력해주세요.")
             return
 
-        xmin = self.label_xmin_val.text()
-        ymin = self.label_ymin_val.text()
-        xmax = self.label_xmax_val.text()
-        ymax = self.label_ymax_val.text()
+        # 클래스 ID 할당
+        if label not in self.class_mapping:
+            self.class_mapping[label] = self.next_class_id
+            self.next_class_id += 1
+        class_id = self.class_mapping[label]
 
+        xmin = int(self.label_xmin_val.text())
+        ymin = int(self.label_ymin_val.text())
+        xmax = int(self.label_xmax_val.text())
+        ymax = int(self.label_ymax_val.text())
+
+        # YOLO 포맷으로 변환 (중심점 x, y, 너비, 높이)
+        x_center = ((xmin + xmax) / 2) / self.original_width
+        y_center = ((ymin + ymax) / 2) / self.original_height
+        width = (xmax - xmin) / self.original_width
+        height = (ymax - ymin) / self.original_height
+
+        # YOLO 포맷으로 txt 파일 저장
+        image_name = os.path.basename(self.current_image_path)
+        txt_name = os.path.splitext(image_name)[0] + '.txt'
+        txt_path = os.path.join(self.image_dir, txt_name)
+
+        with open(txt_path, 'a') as f:
+            f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+
+        # 클래스 매핑 정보 저장
+        classes_file = os.path.join(self.image_dir, 'classes.txt')
+        with open(classes_file, 'w') as f:
+            for label, class_id in sorted(self.class_mapping.items(), key=lambda x: x[1]):
+                f.write(f"{label}\n")
+
+        # 기존 엑셀 저장 로직
         new_entry = {
             'filename': os.path.basename(self.current_image_path),
             'image_id': self.image_id,
             'label': label,
-            'xmin': int(xmin),
-            'ymin': int(ymin),
-            'xmax': int(xmax),
-            'ymax': int(ymax),
+            'xmin': xmin,
+            'ymin': ymin,
+            'xmax': xmax,
+            'ymax': ymax,
             'iscrowd': 0
         }
 
-        new_df = pd.DataFrame([new_entry])  # 새로운 데이터프레임 생성
-        self.df = pd.concat([self.df, new_df], ignore_index=True)  # 데이터프레임 결합
+        new_df = pd.DataFrame([new_entry])
+        self.df = pd.concat([self.df, new_df], ignore_index=True)
         self.df.to_excel(self.excel_path, index=False)
+        
         QMessageBox.information(self, "성공", "데이터가 저장되었습니다.")
         self.image_id += 1
         
